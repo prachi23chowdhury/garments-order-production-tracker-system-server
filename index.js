@@ -37,9 +37,18 @@ async function run() {
 // user related api
 app.post("/users", async(req, res) =>{
   const user = req.body;
-  user.role = "user";
+  
+  if (user.role == null || user.role === "") {
+    user.role = "user";
+  }
   user.createdAt = new Date();
 
+  const email = user.email;
+  const userExists = await usersCollection.findOne({email})
+
+  if(userExists){
+    return res.send({message: "user exist"})
+  }
   const result = await usersCollection.insertOne(user)
   res.send(result);
 })
