@@ -53,9 +53,23 @@ app.post("/users", async(req, res) =>{
   res.send(result);
 })
 
+app.get('/users/:email/role', async (req, res) => {
+    const email = req.params.email;
+    const user = await userCollection.findOne({ email });
+    res.send({ role: user?.role || 'user' });
+});
+
+
     // product api
     app.get("/products", async(req, res) =>{
         const result = await productsCollection.find().toArray();  
+        res.send(result)
+    })
+
+     app.get("/products/:id", async(req, res) =>{
+        const id = req.params.id;
+        const query = {_id: new ObjectId(id)}
+        const result = await productsCollection.findOne(query) 
         res.send(result)
     })
 
@@ -64,6 +78,7 @@ app.post("/users", async(req, res) =>{
         const result = await productsCollection.insertOne(product);
         res.send(result)
     })
+
 
     // our products api
   app.get("/our-products", async (req, res) => {
