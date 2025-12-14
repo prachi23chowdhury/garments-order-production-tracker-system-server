@@ -4,6 +4,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express()
 require('dotenv').config()
 const port = process.env.PORT || 3000;
+const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
 // middleware
 app.use(cors());
@@ -66,19 +67,18 @@ app.get('/users/:email/role', async (req, res) => {
         res.send(result)
     })
 
-     app.get("/products/:id", async(req, res) =>{
+      app.get("/products/:id", async(req, res) =>{
         const id = req.params.id;
         const query = {_id: new ObjectId(id)}
         const result = await productsCollection.findOne(query) 
         res.send(result)
     })
-
+ 
      app.post("/products", async(req, res) =>{
         const product = req.body;
         const result = await productsCollection.insertOne(product);
         res.send(result)
     })
-
 
     // our products api
   app.get("/our-products", async (req, res) => {
@@ -118,10 +118,41 @@ app.get("/products/:id", async (req, res) => {
       res.send(result);
     });
 
-    app.delete("/orders/:id", async (req, res) => {
-      const result = await ordersCollection.deleteOne({ _id: new ObjectId(req.params.id) });
-      res.send(result);
-    });
+    // app.delete("/orders/:id", async (req, res) => {
+    //   const result = await ordersCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+    //   res.send(result);
+    // });
+
+    // payment related apis
+        app.post('/payment-checkout-session', async (req, res) => {
+            const productInfo = req.body;
+            const amount = parseInt(productInfo.price) * 100;
+            const session = await stripe.checkout.sessions.create({
+                line_items: [
+                    {
+                        price_data: {
+                            currency: 'usd',
+                            unit_amount: amount,
+                            product_data: {
+                                name: `Please pay for: ${productInfo.productName}`
+                            }
+                        },
+                        quantity: 1,
+                    },
+                ],
+                mode: 'payment',
+                metadata: {
+                    productId: productInfo.productId,
+                    // trackingId: productInfo.trackingId
+                },
+                customer_email: productInfo.userEmail,
+                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
+            })
+            console.log(session)
+            res.send({ url: session.url })
+        })
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
