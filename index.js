@@ -10,8 +10,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET);
 app.use(cors());
 app.use(express.json());
 
-// garmentsOrderDBUser
-// mBTlTr3XgfqYalmC
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6mz34iu.mongodb.net/?appName=Cluster0`;
 
 const client = new MongoClient(uri, {
@@ -54,11 +53,11 @@ app.post("/users", async(req, res) =>{
   res.send(result);
 })
 
-app.get('/users/:email/role', async (req, res) => {
-    const email = req.params.email;
-    const user = await userCollection.findOne({ email });
-    res.send({ role: user?.role || 'user' });
-});
+// app.get('/users/:email/role', async (req, res) => {
+//     const email = req.params.email;
+//     const user = await userCollection.findOne({ email });
+//     res.send({ role: user?.role || 'user' });
+// });
 
 
     // product api
@@ -92,11 +91,7 @@ app.get('/users/:email/role', async (req, res) => {
 });
 
 //  details api
-app.get("/products/:id", async (req, res) => {
-  const id = parseInt(req.params.id); 
-  const result = await productsCollection.findOne({ id: id });
-  res.send(result);
-});
+
 
 // orders API
     app.post("/orders", async (req, res) => {
@@ -153,6 +148,25 @@ app.get("/products/:id", async (req, res) => {
             res.send({ url: session.url })
         })
 
+          app.patch('/payment-success', async (req, res) => {
+            const sessionId = req.query.session_id;
+             const session = await stripe.checkout.sessions.retrieve(sessionId);
+            // console.log("session id", sessionId);
+            
+            if (session.payment_status === 'paid') {
+                const id = session.metadata.parcelId;
+                const query = { _id: new ObjectId(id) }
+                const update = {
+                    $set: {
+                        paymentStatus: 'paid',
+                        // deliveryStatus: 'pending-pickup'
+                    }
+                }
+                  const result = await productsCollection.updateOne(query, update);
+                  res.send(result)
+          }
+          res.send({success:false})
+  })
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
