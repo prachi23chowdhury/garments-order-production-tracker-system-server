@@ -4,8 +4,16 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express()
 require('dotenv').config()
 const port = process.env.PORT || 3000;
-const stripe = require('stripe')(process.env.STRIPE_SECRET);
+const crypto = require("crypto");
 
+const stripe = require('stripe')(process.env.STRIPE_SECRET);
+function generateTrackingId() {
+    const prefix = "PRCL"; // your brand prefix
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
+    const random = crypto.randomBytes(3).toString("hex").toUpperCase(); // 6-char random hex
+
+    return `${prefix}-${date}-${random}`;
+}
 // middleware
 app.use(cors());
 app.use(express.json());
@@ -32,6 +40,7 @@ async function run() {
     const productsCollection = db.collection("products")
     const ordersCollection = db.collection("orders");
     const usersCollection = db.collection("users");
+    const paymentCollection = db.collection("payment");
 
 
 // user related api
@@ -137,8 +146,8 @@ app.post("/users", async(req, res) =>{
                 ],
                 mode: 'payment',
                 metadata: {
-                    productId: productInfo.productId,
-                    // trackingId: productInfo.trackingId
+                 productId: productInfo.productId,
+                productName: productInfo.productName
                 },
                 customer_email: productInfo.userEmail,
                 success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
@@ -148,25 +157,72 @@ app.post("/users", async(req, res) =>{
             res.send({ url: session.url })
         })
 
-          app.patch('/payment-success', async (req, res) => {
+          // Payment success handler fix
+    app.patch('/payment-success', async (req, res) => {
+        try {
             const sessionId = req.query.session_id;
-             const session = await stripe.checkout.sessions.retrieve(sessionId);
-            // console.log("session id", sessionId);
-            
-            if (session.payment_status === 'paid') {
-                const id = session.metadata.parcelId;
-                const query = { _id: new ObjectId(id) }
-                const update = {
-                    $set: {
-                        paymentStatus: 'paid',
-                        // deliveryStatus: 'pending-pickup'
-                    }
+
+            if (!sessionId) {
+                return res.status(400).send({ success: false, message: "No Session ID found" });
+            }
+
+            const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+            if (session.payment_status !== 'paid') {
+                return res.status(400).send({ success: false, message: "Payment not completed" });
+            }
+
+            // Duplicate check
+            const alreadyExists = await paymentCollection.findOne({ transactionId: session.payment_intent });
+            if (alreadyExists) {
+                return res.send({ success: true, message: "Already processed", trackingId: alreadyExists.trackingId });
+            }
+
+            const trackingId = generateTrackingId();
+            const id = session.metadata.productId;
+
+            // ID check to avoid ObjectId casting error
+            if (!id || !ObjectId.isValid(id)) {
+                 return res.status(400).send({ success: false, message: "Invalid Product ID in metadata" });
+            }
+
+            const query = { _id: new ObjectId(id) };
+            const update = {
+                $set: {
+                    paymentStatus: 'paid',
+                    trackingId: trackingId
                 }
-                  const result = await productsCollection.updateOne(query, update);
-                  res.send(result)
-          }
-          res.send({success:false})
-  })
+            };
+            
+            const result = await productsCollection.updateOne(query, update);
+
+            const payment = {
+                amount: session.amount_total / 100,
+                currency: session.currency,
+                customerEmail: session.customer_email,
+                productId: id,
+                productName: session.metadata.productName,
+                transactionId: session.payment_intent,
+                paymentStatus: session.payment_status,
+                paidAt: new Date(),
+                trackingId: trackingId
+            };
+
+            const resultPayment = await paymentCollection.insertOne(payment);
+
+            res.send({
+                success: true,
+                modifyProduct: result,
+                trackingId: trackingId,
+                transactionId: session.payment_intent,
+                paymentInfo: resultPayment
+            });
+            
+        } catch (error) {
+            console.error("Payment Success Error Details:", error);
+            res.status(500).send({ success: false, error: error.message });
+        }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
