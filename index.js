@@ -224,6 +224,17 @@ app.post("/users", async(req, res) =>{
         }
     });
 
+    // Payment history 
+app.get("/payment", async (req, res) => {
+    const email = req.query.email;
+    if (!email) {
+        return res.status(400).send({ message: "Email is required" });
+    }
+    const query = { customerEmail: email }; 
+    const result = await paymentCollection.find(query).toArray();
+    res.send(result);
+});
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
