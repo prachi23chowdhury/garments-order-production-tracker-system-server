@@ -3,10 +3,23 @@ const cors = require('cors')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express()
 require('dotenv').config()
+const stripe = require('stripe')(process.env.STRIPE_SECRET);
+
 const port = process.env.PORT || 3000;
+
 const crypto = require("crypto");
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET);
+
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./garments-order-production-firebase-adminsdk.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+
+
 function generateTrackingId() {
     const prefix = "PRCL"; // your brand prefix
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
@@ -17,6 +30,27 @@ function generateTrackingId() {
 // middleware
 app.use(cors());
 app.use(express.json());
+
+const verifyFBToken = async (req, res, next) => {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+ try {
+        const idToken = token.split(' ')[1];
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        console.log('decoded in the token', decoded);
+        req.decoded_email = decoded.email;
+        next();
+    }
+    catch (err) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+   
+
+
+}
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6mz34iu.mongodb.net/?appName=Cluster0`;
@@ -225,10 +259,15 @@ app.post("/users", async(req, res) =>{
     });
 
     // Payment history 
-app.get("/payment", async (req, res) => {
+app.get("/payment", verifyFBToken, async (req, res) => {
     const email = req.query.email;
-    if (!email) {
+    if(email){
+      query.customerEmail = email;
+
+      // check email address
+    if (!email == req.decoded_email) {
         return res.status(400).send({ message: "Email is required" });
+    }
     }
     const query = { customerEmail: email }; 
     const result = await paymentCollection.find(query).toArray();
