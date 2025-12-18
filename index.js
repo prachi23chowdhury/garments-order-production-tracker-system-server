@@ -75,6 +75,7 @@ async function run() {
     const ordersCollection = db.collection("orders");
     const usersCollection = db.collection("users");
     const paymentCollection = db.collection("payment");
+    const managersCollection = db.collection("manager");
 
 
 // user related api
@@ -258,21 +259,56 @@ app.post("/users", async(req, res) =>{
         }
     });
 
-    // Payment history 
+    // Payment history
 app.get("/payment", verifyFBToken, async (req, res) => {
-    const email = req.query.email;
-    if(email){
-      query.customerEmail = email;
+    try {
+        const email = req.query.email;
 
-      // check email address
-    if (!email == req.decoded_email) {
-        return res.status(400).send({ message: "Email is required" });
+        if (!email) {
+            return res.status(400).send({ message: "Email is required" });
+        }
+
+        // email verify
+        if (email !== req.decoded_email) {
+            return res.status(403).send({ message: "Forbidden access" });
+        }
+
+        const query = { customerEmail: email };
+        const result = await paymentCollection.find(query).toArray();
+
+        res.send(result);
+    } catch (error) {
+        res.status(500).send({ message: "Server error" });
     }
-    }
-    const query = { customerEmail: email }; 
-    const result = await paymentCollection.find(query).toArray();
-    res.send(result);
 });
+
+
+
+// manager related api 
+       app.get('/managers', async (req, res) => {
+            const { status } = req.query;
+            const query = {}
+
+            if (status) {
+                query.status = status;
+            }
+            
+
+            const cursor = managersCollection.find(query)
+            const result = await cursor.toArray();
+            res.send(result);
+        })
+
+
+        app.post('/managers', async (req, res) => {
+            const manager = req.body;
+            manager.status = 'pending';
+            manager.createdAt = new Date();
+
+            const result = await managersCollection.insertOne(manager);
+            res.send(result);
+        })
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
