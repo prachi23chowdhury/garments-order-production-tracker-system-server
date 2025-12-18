@@ -79,6 +79,13 @@ async function run() {
 
 
 // user related api
+
+app.get("/users", verifyFBToken, async(req, res) =>{
+  const cursor = usersCollection.find();
+  const result = await cursor. toArray();
+  res.send(result)
+})
+
 app.post("/users", async(req, res) =>{
   const user = req.body;
   
@@ -97,11 +104,18 @@ app.post("/users", async(req, res) =>{
   res.send(result);
 })
 
-// app.get('/users/:email/role', async (req, res) => {
-//     const email = req.params.email;
-//     const user = await userCollection.findOne({ email });
-//     res.send({ role: user?.role || 'user' });
-// });
+ app.patch('/users/:id/role', verifyFBToken, async (req, res) => {
+            const id = req.params.id;
+            const roleInfo = req.body;
+            const query = { _id: new ObjectId(id) }
+            const updatedDoc = {
+                $set: {
+                    role: roleInfo.role
+                }
+            }
+            const result = await usersCollection.updateOne(query, updatedDoc)
+            res.send(result);
+        })
 
 
     // product api
@@ -308,6 +322,34 @@ app.get("/payment", verifyFBToken, async (req, res) => {
             const result = await managersCollection.insertOne(manager);
             res.send(result);
         })
+
+        app.patch('/managers/:id', verifyFBToken, async (req, res) => {
+            const status = req.body.status;
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) }
+            const updatedDoc = {
+                $set: {
+                    status: status,
+                    // workStatus: 'available'
+                }
+            }
+
+            const result = await managersCollection.updateOne(query, updatedDoc);
+
+            if (status === 'approved') {
+                const email = req.body.email;
+                const userQuery = { email }
+                const updateUser = {
+                    $set: {
+                        role: 'manager'
+                    }
+                }
+                const userResult = await usersCollection.updateOne(userQuery, updateUser);
+            }
+
+            res.send(result);
+        })
+
 
 
     // Send a ping to confirm a successful connection
