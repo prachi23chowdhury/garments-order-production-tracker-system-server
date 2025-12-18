@@ -78,6 +78,29 @@ async function run() {
     const managersCollection = db.collection("manager");
 
 
+   
+        const verifyAdmin = async (req, res, next) => {
+            const email = req.decoded_email;
+            const query = { email };
+            const user = await usersCollection.findOne(query);
+
+            if (!user || user.role !== 'admin') {
+                return res.status(403).send({ message: 'forbidden access' });
+            }
+
+            next();
+        }
+const verifyManager = async (req, res, next) => {
+  const userEmail = req.decoded_email; // corrected
+  const user = await usersCollection.findOne({ email: userEmail });
+  if (!user || user.role !== "manager") {
+    return res.status(403).send({ message: "Forbidden" });
+  }
+  next();
+};
+
+
+
 // user related api
 
   app.get('/users', verifyFBToken, async (req, res) => {
@@ -85,8 +108,6 @@ async function run() {
             const query = {};
 
             if (searchText) {
-                // query.displayName = {$regex: searchText, $options: 'i'}
-
                 query.$or = [
                     { displayName: { $regex: searchText, $options: 'i' } },
                     { email: { $regex: searchText, $options: 'i' } },
@@ -103,12 +124,25 @@ async function run() {
 
         })
 
-        app.get('/users/:email/role', async (req, res) => {
+        app.get('/users/:email/role',verifyFBToken, async (req, res) => {
             const email = req.params.email;
             const query = { email }
             const user = await usersCollection.findOne(query);
             res.send({ role: user?.role || 'user' })
         })
+
+        app.get('/users/email/:email', verifyFBToken, async (req, res) => {
+  const email = req.params.email;
+
+  // security check
+  if (email !== req.decoded_email) {
+    return res.status(403).send({ message: 'Forbidden access' });
+  }
+
+  const user = await usersCollection.findOne({ email });
+
+  res.send(user);
+});
 
 app.post("/users", async(req, res) =>{
   const user = req.body;
@@ -128,7 +162,7 @@ app.post("/users", async(req, res) =>{
   res.send(result);
 })
 
- app.patch('/users/:id/role', verifyFBToken, async (req, res) => {
+ app.patch('/users/:id/role', verifyFBToken,verifyAdmin, async (req, res) => {
             const id = req.params.id;
             const roleInfo = req.body;
             const query = { _id: new ObjectId(id) }
@@ -143,10 +177,7 @@ app.post("/users", async(req, res) =>{
 
 
     // product api
-    app.get("/products", async(req, res) =>{
-        const result = await productsCollection.find().toArray();  
-        res.send(result)
-    })
+   
 
       app.get("/products/:id", async(req, res) =>{
         const id = req.params.id;
@@ -155,11 +186,58 @@ app.post("/users", async(req, res) =>{
         res.send(result)
     })
  
-     app.post("/products", async(req, res) =>{
+ 
+// GET all services/products
+    app.get("/products", async (req, res) => {
+      try {
+        const products = await productsCollection.find().toArray();
+        res.send(products);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch products" });
+      }
+    });
+
+    // ADD a new service/product
+    app.post("/products", async (req, res) => {
+      try {
         const product = req.body;
+        product.createdAt = new Date();
         const result = await productsCollection.insertOne(product);
-        res.send(result)
-    })
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to add product" });
+      }
+    });
+
+    // DELETE a service/product
+    app.delete("/products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await productsCollection.deleteOne({ _id: new ObjectId(id) });
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to delete product" });
+      }
+    });
+
+// PATCH (update)
+app.patch("/products/:id", async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body;
+
+  const result = await productsCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: updateData }
+  );
+
+  res.send(result);
+});
+
+
+
 
     // our products api
   app.get("/our-products", async (req, res) => {
@@ -194,6 +272,55 @@ app.post("/users", async(req, res) =>{
       const result = await cursor.toArray();
       res.send(result);
     });
+
+app.get("/orders/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+    if (!order) return res.status(404).send({ message: "Order not found" });
+    res.send(order);
+  } catch (error) {
+    res.status(500).send({ message: error.message });
+  }
+});
+
+
+app.patch("/orders/:id/status", verifyFBToken, verifyAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!["Pending", "Approved", "Rejected"].includes(status)) {
+    return res.status(400).send({ message: "Invalid status" });
+  }
+
+  const result = await ordersCollection.updateOne(
+    { _id: new ObjectId(id) },
+    {
+      $set: {
+        status,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  res.send(result);
+});
+
+
+app.get("/admin/orders", verifyAdmin, async (req, res) => {
+  const status = req.query.status;
+
+  let query = {};
+  if (status) {
+    query.status = status; // Pending / Approved / Rejected
+  }
+
+  const result = await ordersCollection.find(query).toArray();
+  res.send(result);
+});
+  
+
+
 
     // app.delete("/orders/:id", async (req, res) => {
     //   const result = await ordersCollection.deleteOne({ _id: new ObjectId(req.params.id) });
@@ -263,7 +390,8 @@ app.post("/users", async(req, res) =>{
             const update = {
                 $set: {
                     paymentStatus: 'paid',
-                    trackingId: trackingId
+                    trackingId: trackingId,
+                    Status: "pending"
                 }
             };
             
@@ -347,7 +475,7 @@ app.get("/payment", verifyFBToken, async (req, res) => {
             res.send(result);
         })
 
-        app.patch('/managers/:id', verifyFBToken, async (req, res) => {
+        app.patch('/managers/:id', verifyFBToken,verifyAdmin, async (req, res) => {
             const status = req.body.status;
             const id = req.params.id;
             const query = { _id: new ObjectId(id) }
