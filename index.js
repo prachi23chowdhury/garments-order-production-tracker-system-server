@@ -21,7 +21,7 @@ admin.initializeApp({
 
 
 function generateTrackingId() {
-    const prefix = "PRCL"; // your brand prefix
+    const prefix = "PRCL"; 
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
     const random = crypto.randomBytes(3).toString("hex").toUpperCase(); // 6-char random hex
 
@@ -66,7 +66,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
+  
     await client.connect();
 
 
@@ -91,7 +91,7 @@ async function run() {
             next();
         }
 const verifyManager = async (req, res, next) => {
-  const userEmail = req.decoded_email; // corrected
+  const userEmail = req.decoded_email; 
   const user = await usersCollection.findOne({ email: userEmail });
   if (!user || user.role !== "manager") {
     return res.status(403).send({ message: "Forbidden" });
@@ -180,7 +180,7 @@ app.post("/users", async(req, res) =>{
 app.post("/products", verifyFBToken, verifyManager, async (req, res) => {
   try {
     const product = req.body;
-    product.managerEmail = req.decoded_email; // manager email
+    product.managerEmail = req.decoded_email; 
     product.createdAt = new Date();
 
     const result = await productsCollection.insertOne(product);
@@ -191,7 +191,7 @@ app.post("/products", verifyFBToken, verifyManager, async (req, res) => {
   }
 });
 
-// Get all products
+// All products (buyers/public)
 app.get("/products", async (req, res) => {
   try {
     const products = await productsCollection.find().toArray();
@@ -201,22 +201,20 @@ app.get("/products", async (req, res) => {
     res.status(500).send({ message: "Failed to fetch products" });
   }
 });
-// Get all products
-app.get("/products", verifyFBToken, verifyManager, async (req, res) => {
+
+// Manager's own products
+app.get("/products/manager", verifyFBToken, verifyManager, async (req, res) => {
   try {
     const managerEmail = req.decoded_email;
-
-    const products = await productsCollection
-      .find({ managerEmail })
-      .toArray();
-
+    const products = await productsCollection.find({ managerEmail }).toArray();
     res.send(products);
   } catch (err) {
+    console.error(err);
     res.status(500).send({ message: "Failed to fetch manager products" });
   }
 });
 
-// ✅ Single product by ID AFTER
+
 app.get("/products/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -290,57 +288,77 @@ app.delete("/products/:id", verifyFBToken, verifyManager, async (req, res) => {
 
 
 // orders API
-    app.post("/orders", async (req, res) => {
-      const order = req.body;
-      order.createdAt = new Date();
-      // time
-      const result = await ordersCollection.insertOne(order);
-      res.send(result);
-    });
+   app.post("/orders", async (req, res) => {
+  const order = req.body;
+  order.status = "Pending";
+  order.createdAt = new Date();
 
-    app.get("/orders", async (req, res) => {
-      const query = {};
-      const {email} = req.query;
-      if(email){
-        query.userEmail = email;
-      }
-      const cursor = ordersCollection.find(query)
-      const result = await cursor.toArray();
-      res.send(result);
-    });
+  const result = await ordersCollection.insertOne(order);
+  res.send(result);
+});
+
+
+app.get("/orders", verifyFBToken, async (req, res) => {
+  try {
+    const userEmail = req.decoded_email; // token থেকে authenticated user
+    const orders = await ordersCollection
+      .find({ userEmail })
+      .toArray();
+    res.send(orders);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to fetch orders" });
+  }
+});
+
 
 app.get("/orders/:id", async (req, res) => {
   const { id } = req.params;
+
   try {
-    const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
-    if (!order) return res.status(404).send({ message: "Order not found" });
+    const order = await ordersCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!order) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+
     res.send(order);
-  } catch (error) {
-    res.status(500).send({ message: error.message });
+  } catch (err) {
+    res.status(500).send({ message: err.message });
   }
 });
 
 
-app.patch("/orders/:id/status", verifyFBToken, verifyAdmin, async (req, res) => {
+
+// backend route
+app.patch("/orders/:id/status", async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  if (!["Pending", "Approved", "Rejected"].includes(status)) {
-    return res.status(400).send({ message: "Invalid status" });
+  const updateDoc = {
+    $set: {
+      status,
+    },
+  };
+
+  if (status === "Approved") {
+    updateDoc.$set.approvedAt = new Date();
   }
 
-  const result = await ordersCollection.updateOne(
-    { _id: new ObjectId(id) },
-    {
-      $set: {
-        status,
-        updatedAt: new Date(),
-      },
-    }
-  );
+  try {
+    const result = await ordersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      updateDoc
+    );
 
-  res.send(result);
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to update status" });
+  }
 });
+
+
 
 
 app.get("/admin/orders", verifyAdmin, async (req, res) => {
@@ -348,7 +366,7 @@ app.get("/admin/orders", verifyAdmin, async (req, res) => {
 
   let query = {};
   if (status) {
-    query.status = status; // Pending / Approved / Rejected
+    query.status = status; 
   }
 
   const result = await ordersCollection.find(query).toArray();
@@ -356,7 +374,52 @@ app.get("/admin/orders", verifyAdmin, async (req, res) => {
 });
 
 
-  
+ 
+app.post("/orders/:id/tracking", async (req, res) => {
+  const { id } = req.params;
+  const trackingData = req.body;
+
+  const newTracking = {
+    status: trackingData.status,
+    location: trackingData.location,
+    note: trackingData.note || "",
+    date: new Date(trackingData.date || Date.now()),
+  };
+
+  const result = await ordersCollection.updateOne(
+    { _id: new ObjectId(id) },
+    {
+      $push: { tracking: newTracking },
+      $set: { status: trackingData.status }, // ⭐ order status sync
+    }
+  );
+
+  res.send(result);
+});
+
+app.get("/orders/:id/tracking", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const order = await ordersCollection.findOne(
+      { _id: new ObjectId(id) },
+      { projection: { tracking: 1 } } 
+    );
+
+    if (!order) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+
+    const tracking = (order.tracking || []).sort(
+      (a, b) => new Date(a.date) - new Date(b.date)
+    );
+
+    res.send(tracking);
+  } catch (error) {
+    res.status(500).send({ message: error.message });
+  }
+});
+
 
 
 
