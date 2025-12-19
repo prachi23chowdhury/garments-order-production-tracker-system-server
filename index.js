@@ -176,65 +176,101 @@ app.post("/users", async(req, res) =>{
         })
 
 
-    // product api
-   
 
-      app.get("/products/:id", async(req, res) =>{
-        const id = req.params.id;
-        const query = {_id: new ObjectId(id)}
-        const result = await productsCollection.findOne(query) 
-        res.send(result)
-    })
- 
- 
-// GET all services/products
-    app.get("/products", async (req, res) => {
-      try {
-        const products = await productsCollection.find().toArray();
-        res.send(products);
-      } catch (err) {
-        console.error(err);
-        res.status(500).send({ message: "Failed to fetch products" });
-      }
-    });
+app.post("/products", verifyFBToken, verifyManager, async (req, res) => {
+  try {
+    const product = req.body;
+    product.managerEmail = req.decoded_email; // manager email
+    product.createdAt = new Date();
 
-    // ADD a new service/product
-    app.post("/products", async (req, res) => {
-      try {
-        const product = req.body;
-        product.createdAt = new Date();
-        const result = await productsCollection.insertOne(product);
-        res.send(result);
-      } catch (err) {
-        console.error(err);
-        res.status(500).send({ message: "Failed to add product" });
-      }
-    });
-
-    // DELETE a service/product
-    app.delete("/products/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const result = await productsCollection.deleteOne({ _id: new ObjectId(id) });
-        res.send(result);
-      } catch (err) {
-        console.error(err);
-        res.status(500).send({ message: "Failed to delete product" });
-      }
-    });
-
-// PATCH (update)
-app.patch("/products/:id", async (req, res) => {
-  const { id } = req.params;
-  const updateData = req.body;
-
-  const result = await productsCollection.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: updateData }
-  );
-
-  res.send(result);
+    const result = await productsCollection.insertOne(product);
+    res.send({ success: true, product: { _id: result.insertedId, ...product } });
+  } catch (err) {
+    console.error("Error adding product:", err);
+    res.status(500).send({ message: "Failed to add product" });
+  }
 });
+
+// Get all products
+app.get("/products", async (req, res) => {
+  try {
+    const products = await productsCollection.find().toArray();
+    res.send(products);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Failed to fetch products" });
+  }
+});
+// Get all products
+app.get("/products", verifyFBToken, verifyManager, async (req, res) => {
+  try {
+    const managerEmail = req.decoded_email;
+
+    const products = await productsCollection
+      .find({ managerEmail })
+      .toArray();
+
+    res.send(products);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to fetch manager products" });
+  }
+});
+
+// ✅ Single product by ID AFTER
+app.get("/products/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const product = await productsCollection.findOne({ _id: new ObjectId(id) });
+    if (!product) return res.status(404).send({ message: "Product not found" });
+    res.send(product);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Server error" });
+  }
+});
+
+
+
+
+// Update product
+app.put("/products/:id", verifyFBToken, verifyManager, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updates = req.body;
+
+    const product = await productsCollection.findOne({ _id: new ObjectId(id) });
+    if (!product) return res.status(404).send({ message: "Product not found" });
+
+    if (product.managerEmail !== req.decoded_email)
+      return res.status(403).send({ message: "Not allowed" });
+
+    await productsCollection.updateOne({ _id: new ObjectId(id) }, { $set: updates });
+    res.send({ success: true, updatedProduct: { ...product, ...updates } });
+  } catch (err) {
+    console.error("Error updating product:", err);
+    res.status(500).send({ message: "Server error" });
+  }
+});
+
+// Delete product
+app.delete("/products/:id", verifyFBToken, verifyManager, async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const product = await productsCollection.findOne({ _id: new ObjectId(id) });
+    if (!product) return res.status(404).send({ message: "Product not found" });
+
+    if (product.managerEmail !== req.decoded_email)
+      return res.status(403).send({ message: "Not allowed" });
+
+    await productsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send({ success: true, message: "Product deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting product:", err);
+    res.status(500).send({ message: "Server error" });
+  }
+});
+
 
 
 
@@ -318,6 +354,8 @@ app.get("/admin/orders", verifyAdmin, async (req, res) => {
   const result = await ordersCollection.find(query).toArray();
   res.send(result);
 });
+
+
   
 
 
@@ -391,7 +429,7 @@ app.get("/admin/orders", verifyAdmin, async (req, res) => {
                 $set: {
                     paymentStatus: 'paid',
                     trackingId: trackingId,
-                    Status: "pending"
+                    orderStatus: "pending"
                 }
             };
             
