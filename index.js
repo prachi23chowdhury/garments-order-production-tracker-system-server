@@ -12,7 +12,8 @@ const crypto = require("crypto");
 
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./garments-order-production-firebase-adminsdk.json");
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -22,8 +23,8 @@ admin.initializeApp({
 
 function generateTrackingId() {
     const prefix = "PRCL"; 
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
-    const random = crypto.randomBytes(3).toString("hex").toUpperCase(); // 6-char random hex
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, ""); 
+    const random = crypto.randomBytes(3).toString("hex").toUpperCase(); 
 
     return `${prefix}-${date}-${random}`;
 }
@@ -32,25 +33,27 @@ app.use(cors());
 app.use(express.json());
 
 const verifyFBToken = async (req, res, next) => {
-    const token = req.headers.authorization;
+  console.log(" AUTH HEADER:", req.headers.authorization);
+  console.log(" ALL HEADERS:", req.headers);
 
-    if (!token) {
-        return res.status(401).send({ message: 'unauthorized access' })
-    }
- try {
-        const idToken = token.split(' ')[1];
-        const decoded = await admin.auth().verifyIdToken(idToken);
-        console.log('decoded in the token', decoded);
-        req.decoded_email = decoded.email;
-        next();
-    }
-    catch (err) {
-        return res.status(401).send({ message: 'unauthorized access' })
-    }
-   
+  const authHeader = req.headers.authorization;
 
+  if (!authHeader) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
 
-}
+  try {
+    const idToken = authHeader.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(idToken);
+
+    req.decoded_email = decoded.email;
+    next();
+  } catch (err) {
+    console.error(" TOKEN VERIFY ERROR:", err.message);
+    return res.status(403).send({ message: "forbidden access" });
+  }
+};
+
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6mz34iu.mongodb.net/?appName=Cluster0`;
@@ -99,7 +102,32 @@ const verifyManager = async (req, res, next) => {
   next();
 };
 
+const checkUserStatus = async (req, res, next) => {
+  const email = req.decoded_email;
+  let user = await usersCollection.findOne({ email });
 
+  
+  if (!user) {
+    const newUser = {
+      email,
+      role: "user",
+      status: "active",
+      createdAt: new Date(),
+    };
+    const result = await usersCollection.insertOne(newUser);
+    user = newUser;
+  }
+
+  if (user.status === "suspended") {
+    return res.status(403).send({
+      message: "Your account is suspended",
+      reason: user.reason || "",
+      feedback: user.feedback || "",
+    });
+  }
+
+  next();
+};
 
 // user related api
 
@@ -130,37 +158,51 @@ const verifyManager = async (req, res, next) => {
             const user = await usersCollection.findOne(query);
             res.send({ role: user?.role || 'user' })
         })
+app.get(
+  '/users/email/:email',
+  verifyFBToken,        // 🔥 ADD THIS
+  async (req, res) => {
+    const email = req.params.email;
 
-        app.get('/users/email/:email', verifyFBToken, async (req, res) => {
-  const email = req.params.email;
+    if (email !== req.decoded_email) {
+      return res.status(403).send({ message: 'Forbidden access' });
+    }
 
-  // security check
-  if (email !== req.decoded_email) {
-    return res.status(403).send({ message: 'Forbidden access' });
+    const user = await usersCollection.findOne({ email });
+
+    if (!user) {
+      return res.status(404).send({ message: 'User not found' });
+    }
+
+    res.send({
+      _id: user._id,
+      name: user.name || user.displayName || "",
+      email: user.email,
+      photoURL: user.photoURL || "",
+      role: user.role || "user",
+      status: user.status || "active",
+      reason: user.reason || "",
+      feedback: user.feedback || "",
+      createdAt: user.createdAt,
+    });
   }
+);
 
-  const user = await usersCollection.findOne({ email });
 
-  res.send(user);
-});
-
-app.post("/users", async(req, res) =>{
+app.post("/users", async (req, res) => {
   const user = req.body;
-  
-  if (user.role == null || user.role === "") {
-    user.role = "user";
-  }
+
+  user.role = user.role || "user";
+  user.status = user.status || "active"; 
   user.createdAt = new Date();
 
-  const email = user.email;
-  const userExists = await usersCollection.findOne({email})
+  const exists = await usersCollection.findOne({ email: user.email });
+  if (exists) return res.send({ message: "user exist" });
 
-  if(userExists){
-    return res.send({message: "user exist"})
-  }
-  const result = await usersCollection.insertOne(user)
+  const result = await usersCollection.insertOne(user);
   res.send(result);
-})
+});
+
 
  app.patch('/users/:id/role', verifyFBToken,verifyAdmin, async (req, res) => {
             const id = req.params.id;
@@ -176,8 +218,31 @@ app.post("/users", async(req, res) =>{
         })
 
 
+        app.patch('/users/:id/status', verifyFBToken, verifyAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) return res.status(400).send({ message: "Invalid ID" });
+        const { status, reason, feedback } = req.body;
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = { $set: { status } };
 
-app.post("/products", verifyFBToken, verifyManager, async (req, res) => {
+        if (status === 'suspended') {
+            updateDoc.$set.reason = reason || '';
+            updateDoc.$set.feedback = feedback || '';
+        } else {
+            updateDoc.$set.reason = '';
+            updateDoc.$set.feedback = '';
+        }
+
+        const result = await usersCollection.updateOne(query, updateDoc);
+        res.send(result);
+    } catch (err) {
+        res.status(500).send({ message: "Server error", error: err.message });
+    }
+});
+
+
+app.post("/products", verifyFBToken, verifyManager, checkUserStatus, async (req, res) => {
   try {
     const product = req.body;
     product.managerEmail = req.decoded_email; 
@@ -270,6 +335,21 @@ app.delete("/products/:id", verifyFBToken, verifyManager, async (req, res) => {
 });
 
 
+app.patch("/products/:id/show-home", verifyFBToken, async (req, res) => {
+  const { showOnHome } = req.body;
+  const { id } = req.params;
+  
+  try {
+    const result = await productsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { showOnHome } }
+    );
+    res.send({ success: true, result });
+  } catch (err) {
+    res.status(500).send({ success: false, message: err.message });
+  }
+});
+
 
 
 
@@ -288,27 +368,65 @@ app.delete("/products/:id", verifyFBToken, verifyManager, async (req, res) => {
 
 
 // orders API
-   app.post("/orders", async (req, res) => {
-  const order = req.body;
-  order.status = "Pending";
-  order.createdAt = new Date();
+   app.post(
+  "/orders",
+  verifyFBToken,       
+  checkUserStatus,
+  async (req, res) => {
+    const order = req.body;
+    order.userEmail = req.decoded_email;
+    order.status = "Pending";
+    order.createdAt = new Date();
 
-  const result = await ordersCollection.insertOne(order);
-  res.send(result);
-});
+    const result = await ordersCollection.insertOne(order);
+    res.send(result);
+  }
+);
+
 
 
 app.get("/orders", verifyFBToken, async (req, res) => {
   try {
-    const userEmail = req.decoded_email; // token থেকে authenticated user
+    const userEmail = req.decoded_email;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const skip = (page - 1) * limit;
+
+    const total = await ordersCollection.countDocuments({ userEmail });
+
+  
     const orders = await ordersCollection
       .find({ userEmail })
+      .sort({ createdAt: -1 }) 
+      .skip(skip)
+      .limit(limit)
       .toArray();
-    res.send(orders);
+
+    res.send({ orders, total });
   } catch (err) {
+    console.error(err);
     res.status(500).send({ message: "Failed to fetch orders" });
   }
 });
+
+
+app.get("/orders/all", verifyFBToken, async (req, res) => {
+  try {
+    const status = req.query.status; 
+    const query = {};
+
+    if (status) {
+      query.status = status;
+    }
+
+    const orders = await ordersCollection.find(query).toArray();
+    res.send(orders);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to fetch all orders" });
+  }
+});
+
+
 
 
 app.get("/orders/:id", async (req, res) => {
@@ -331,7 +449,7 @@ app.get("/orders/:id", async (req, res) => {
 
 
 
-// backend route
+
 app.patch("/orders/:id/status", async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -360,18 +478,18 @@ app.patch("/orders/:id/status", async (req, res) => {
 
 
 
-
-app.get("/admin/orders", verifyAdmin, async (req, res) => {
+app.get("/admin/orders", verifyFBToken, verifyAdmin, async (req, res) => {
   const status = req.query.status;
 
   let query = {};
   if (status) {
-    query.status = status; 
+    query.status = status;
   }
 
   const result = await ordersCollection.find(query).toArray();
   res.send(result);
 });
+
 
 
  
@@ -390,7 +508,7 @@ app.post("/orders/:id/tracking", async (req, res) => {
     { _id: new ObjectId(id) },
     {
       $push: { tracking: newTracking },
-      $set: { status: trackingData.status }, // ⭐ order status sync
+      $set: { status: trackingData.status }, 
     }
   );
 
@@ -458,7 +576,6 @@ app.get("/orders/:id/tracking", async (req, res) => {
             res.send({ url: session.url })
         })
 
-          // Payment success handler fix
     app.patch('/payment-success', async (req, res) => {
         try {
             const sessionId = req.query.session_id;
@@ -482,7 +599,7 @@ app.get("/orders/:id/tracking", async (req, res) => {
             const trackingId = generateTrackingId();
             const id = session.metadata.productId;
 
-            // ID check to avoid ObjectId casting error
+        
             if (!id || !ObjectId.isValid(id)) {
                  return res.status(400).send({ success: false, message: "Invalid Product ID in metadata" });
             }
@@ -605,10 +722,10 @@ app.get("/payment", verifyFBToken, async (req, res) => {
 
 
 
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
-  } finally {
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
+  } 
+  finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
   }
